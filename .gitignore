@@ -1,0 +1,7 @@
+# Keep your real API key private
+config.js
+
+# Python
+__pycache__/
+*.pyc
+tests.py

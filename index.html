@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>IPL Arena 🏏 — Fan Battle + Predictor</title>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- iOS home screen -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="IPL Arena" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+
+  <!-- Theme colour (Android + Safari tab bar) -->
+  <meta name="theme-color" content="#6c63ff" />
+
+  <!-- Standard meta -->
+  <meta name="description" content="IPL Fan Battle & Live Match Predictor" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <!-- ===== ONBOARDING OVERLAY (first visit) ===== -->
+  <div id="onboarding" class="onboarding-overlay">
+    <div class="onboarding-box">
+      <div class="onboarding-logo">🏏 IPL Arena</div>
+      <h2>Pick Your Team</h2>
+      <p>Choose your favourite IPL team to start your fan journey!</p>
+      <div class="team-grid" id="team-picker"></div>
+    </div>
+  </div>
+
+  <!-- ===== TOP NAVBAR ===== -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="app-logo">🏏 <strong>IPL</strong> Arena</span>
+      <div class="my-team-badge" id="topbar-team" style="display:none"></div>
+    </div>
+    <nav class="topbar-nav">
+      <button class="nav-btn active" data-view="home">🏠 Home</button>
+      <button class="nav-btn" data-view="matches">📅 Matches</button>
+      <button class="nav-btn" data-view="leaderboard">🏆 Leaderboard</button>
+      <button class="nav-btn" data-view="chat">💬 Chat</button>
+      <button class="nav-btn" data-view="analytics">📊 Analytics</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="coin-display" id="coin-display">🪙 <span id="coin-count">500</span></div>
+      <div class="points-display" id="points-display">⭐ <span id="points-count">0</span> pts</div>
+      <button class="profile-btn" id="btn-profile">👤</button>
+    </div>
+  </header>
+
+  <!-- ===== API STATUS BAR ===== -->
+  <div id="api-status-bar" class="api-status-bar setup">
+    <span id="api-status-text">⚡ Connect live cricket data — <strong>Add API Key</strong></span>
+    <button class="api-setup-btn" id="btn-open-apikey">Setup Free API Key →</button>
+    <span class="api-hits" id="api-hits" style="display:none"></span>
+  </div>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="main">
+
+    <!-- ============ HOME VIEW ============ -->
+    <section id="view-home" class="view active">
+
+      <!-- Live Match Banner -->
+      <div class="live-banner" id="live-banner" style="display:none">
+        <div class="live-banner-inner">
+          <span class="live-dot"></span>
+          <span class="live-label">LIVE</span>
+          <div class="live-teams" id="live-teams-text"></div>
+          <div class="live-score" id="live-score-text"></div>
+          <button class="btn-watch" id="btn-watch-live">Watch Predictor →</button>
+        </div>
+      </div>
+
+      <!-- Hero Stats Row -->
+      <div class="hero-cards">
+        <div class="hero-card purple">
+          <div class="hero-icon">🏆</div>
+          <div class="hero-info">
+            <div class="hero-val" id="h-rank">#—</div>
+            <div class="hero-label">Your Rank</div>
+          </div>
+        </div>
+        <div class="hero-card gold">
+          <div class="hero-icon">⭐</div>
+          <div class="hero-info">
+            <div class="hero-val" id="h-points">0</div>
+            <div class="hero-label">Total Points</div>
+          </div>
+        </div>
+        <div class="hero-card green">
+          <div class="hero-icon">🎯</div>
+          <div class="hero-info">
+            <div class="hero-val" id="h-accuracy">0%</div>
+            <div class="hero-label">Accuracy</div>
+          </div>
+        </div>
+        <div class="hero-card orange">
+          <div class="hero-icon">🪙</div>
+          <div class="hero-info">
+            <div class="hero-val" id="h-coins">500</div>
+            <div class="hero-label">Coins</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Today's / Upcoming Matches Quick Predict -->
+      <div class="section-title">⚡ Predict &amp; Win</div>
+      <div class="match-cards-row" id="home-match-cards"></div>
+
+      <!-- My Recent Predictions -->
+      <div class="section-title">📋 My Predictions</div>
+      <div class="predictions-list" id="my-predictions-list">
+        <div class="empty-msg">No predictions yet. Pick a match and start predicting! 🏏</div>
+      </div>
+
+    </section>
+
+    <!-- ============ MATCHES VIEW ============ -->
+    <section id="view-matches" class="view">
+      <div class="view-header">
+        <h2>📅 All Matches</h2>
+        <div class="tab-pills" id="matches-tabs">
+          <button class="pill active" data-tab="upcoming">Upcoming</button>
+          <button class="pill" data-tab="live">🔴 Live</button>
+          <button class="pill" data-tab="completed">Completed</button>
+        </div>
+      </div>
+      <div id="matches-list" class="matches-full-list"></div>
+    </section>
+
+    <!-- ============ MATCH ROOM VIEW ============ -->
+    <section id="view-matchroom" class="view">
+      <button class="back-btn" id="btn-back-matches">← Back to Matches</button>
+      <div id="matchroom-content"></div>
+    </section>
+
+    <!-- ============ LEADERBOARD VIEW ============ -->
+    <section id="view-leaderboard" class="view">
+      <div class="view-header">
+        <h2>🏆 Leaderboard</h2>
+        <div class="tab-pills">
+          <button class="pill active" id="lb-tab-global">Global</button>
+          <button class="pill" id="lb-tab-weekly">This Week</button>
+        </div>
+      </div>
+      <!-- Your Rank Card -->
+      <div class="your-rank-card" id="your-rank-card"></div>
+      <!-- Top 10 -->
+      <div class="leaderboard-list" id="leaderboard-list"></div>
+    </section>
+
+    <!-- ============ CHAT VIEW ============ -->
+    <section id="view-chat" class="view">
+      <div class="view-header">
+        <h2>💬 Fan Chat Arena</h2>
+        <select class="chat-match-select" id="chat-match-select"></select>
+      </div>
+      <div class="chat-room">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="trash-talk-row" id="trash-talk-row"></div>
+        <div class="chat-input-bar">
+          <input type="text" id="chat-input" class="chat-input" placeholder="Type your message... 🔥" maxlength="120" />
+          <button class="btn-send" id="btn-send-chat">Send 🚀</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ANALYTICS VIEW ============ -->
+    <section id="view-analytics" class="view">
+      <div class="view-header">
+        <h2>📊 Smart Analytics</h2>
+      </div>
+      <!-- Team Comparison -->
+      <div class="analytics-grid">
+        <div class="analytics-card wide">
+          <h3>⚔️ Team Comparison</h3>
+          <div class="team-compare-row">
+            <select id="compare-t1" class="input-sm"></select>
+            <span class="vs-label">VS</span>
+            <select id="compare-t2" class="input-sm"></select>
+            <button class="btn-compare" id="btn-compare">Analyse →</button>
+          </div>
+          <div id="compare-result" class="compare-result"></div>
+        </div>
+        <div class="analytics-card">
+          <h3>📈 Team Win Rates</h3>
+          <canvas id="chart-winrates"></canvas>
+        </div>
+        <div class="analytics-card">
+          <h3>🏆 IPL Titles</h3>
+          <canvas id="chart-titles"></canvas>
+        </div>
+        <div class="analytics-card wide">
+          <h3>💪 Team Strength Ratings</h3>
+          <canvas id="chart-strength"></canvas>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===================================================== -->
+  <!--  MODALS                                               -->
+  <!-- ===================================================== -->
+
+  <!-- ===== MATCH PREDICTION MODAL (within matchroom) ===== -->
+  <!-- Rendered dynamically in matchroom content -->
+
+  <!-- ===== PROFILE MODAL ===== -->
+  <dialog id="modal-profile" class="modal">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h2>👤 My Profile</h2>
+        <button class="modal-close" id="btn-profile-close">&times;</button>
+      </div>
+      <div id="profile-content"></div>
+      <div class="form-row" style="margin-top:16px">
+        <label class="field-label">Display Name</label>
+        <input type="text" id="profile-name" class="input-field" placeholder="Your name" maxlength="20" />
+      </div>
+      <div class="form-row" style="margin-top:12px">
+        <label class="field-label">Favourite Team</label>
+        <select id="profile-team" class="input-field"></select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="btn-profile-cancel">Cancel</button>
+        <button class="btn-primary" id="btn-profile-save">Save</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ===== PREDICTION RESULT MODAL ===== -->
+  <dialog id="modal-result" class="modal">
+    <div class="modal-inner text-center">
+      <div class="result-emoji" id="result-emoji">🎉</div>
+      <h2 id="result-title">Prediction Locked!</h2>
+      <p id="result-msg" class="result-msg"></p>
+      <div class="coins-earned" id="coins-earned" style="display:none">
+        🪙 <span id="coins-earned-val">0</span> coins earned!
+      </div>
+      <button class="btn-primary" id="btn-result-ok" style="margin-top:16px">Awesome! 🏏</button>
+    </div>
+  </dialog>
+
+  <!-- ===== API KEY SETUP MODAL ===== -->
+  <dialog id="modal-apikey" class="modal">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h2>🔑 Setup Live Data</h2>
+        <button class="modal-close" id="btn-apikey-close">&times;</button>
+      </div>
+      <div class="apikey-steps">
+        <div class="apikey-step"><span class="step-num">1</span> Go to <strong>cricketdata.org</strong> and sign up free</div>
+        <div class="apikey-step"><span class="step-num">2</span> Copy your API key from the dashboard</div>
+        <div class="apikey-step"><span class="step-num">3</span> Paste it below — <strong>100 free calls/day</strong></div>
+      </div>
+      <div class="form-row" style="margin-top:16px">
+        <label class="field-label">Your cricketdata.org API Key</label>
+        <input type="text" id="apikey-input" class="input-field" placeholder="Paste your API key here…" />
+      </div>
+      <div id="apikey-test-msg" style="font-size:0.8rem;margin-top:8px;min-height:20px"></div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="btn-apikey-cancel">Cancel</button>
+        <button class="btn-primary" id="btn-apikey-test">Test &amp; Save 🚀</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Bottom nav for mobile / iPhone -->
+  <nav class="bottom-nav" id="bottom-nav">
+    <button class="bottom-nav-btn active" data-view="home"><span class="bnav-icon">🏠</span>Home</button>
+    <button class="bottom-nav-btn" data-view="matches"><span class="bnav-icon">📅</span>Matches</button>
+    <button class="bottom-nav-btn" data-view="leaderboard"><span class="bnav-icon">🏆</span>Ranks</button>
+    <button class="bottom-nav-btn" data-view="chat"><span class="bnav-icon">💬</span>Chat</button>
+    <button class="bottom-nav-btn" data-view="analytics"><span class="bnav-icon">📊</span>Stats</button>
+  </nav>
+
+  <!-- config.js is gitignored; this fallback prevents crashes when it's absent -->
+  <script>if(typeof CONFIG==='undefined') var CONFIG = { CRICKETDATA_API_KEY: '' };</script>
+  <script src="config.js" onerror="void 0"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .catch(err => console.warn('SW registration failed:', err));
+    }
+  </script>
+</body>
+</html>
