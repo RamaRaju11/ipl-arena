@@ -1,4 +1,4 @@
-const CACHE = 'ipl-arena-v3';
+const CACHE = 'ipl-arena-v4';
 
 // Derive base path so this works both at / and at /ipl-arena/
 const BASE = self.registration.scope;
