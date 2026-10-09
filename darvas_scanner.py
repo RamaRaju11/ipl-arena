@@ -1,4 +1,4 @@
-"""Daily Darvas Scanner v3. GitHub Actions: python darvas_scanner.py
+"""Daily Darvas Scanner v5. GitHub Actions: python darvas_scanner.py
 
 Universe: official Nasdaq Trader directories. Quotes: unofficial Yahoo Finance via
  yfinance, subject to delays, availability and rate limits. Technical screening is
@@ -54,7 +54,10 @@ FIELDS = [
     'SMA50_Pass','SMA200_Pass','Pass_Finviz_Filters',
     'History_Days','Data_Status','Last_Price_Date','Box_Top','Box_Bottom',
     'Box_Width_Pct','Volume_Ratio','ATR14','Entry_Trigger','Stop_Loss',
-    'Risk_Pct','Target_2R','Darvas_Status','Corporate_Action_Check','Error'
+    'Risk_Pct','Target_2R','Darvas_Status','Corporate_Action_Check','Error',
+    'Return_5D_Pct','Return_20D_Pct','ATR_Pct','Dollar_Volume',
+    'Momentum_Score','Darvas_Score','Opportunity_Score','Score_Track',
+    'Scenario_Target','Scenario_Upside_Pct','Reward_Risk_Ratio','Stale_Data'
 ]
 
 
@@ -130,6 +133,10 @@ def download_batch(symbols):
                     h = raw.copy()
                 if all(c in h.columns for c in ('Close','High','Low','Volume')):
                     h = h.dropna(subset=['Close','High','Low','Volume'])
+                    # Avoid ranking on an unfinished daily bar during market hours.
+                    now = datetime.now(ZoneInfo('America/Chicago'))
+                    if now.weekday() < 5 and (now.hour,now.minute) < (15,30):
+                        h = h.loc[pd.to_datetime(h.index).date < now.date()]
                     if len(h):
                         result[original] = h
             except (KeyError, ValueError):
@@ -226,6 +233,46 @@ def evaluate(info, h=None, error=''):
         else:
             stage = 'STRUCTURE REVIEW'
         base['Darvas_Status'] = stage
+        # Only current and historical observations are used. No future-price leakage.
+        ret5 = (price/float(c.iloc[-6])-1)*100 if n>=6 and c.iloc[-6]>0 else 0
+        ret20 = (price/float(c.iloc[-21])-1)*100 if n>=21 and c.iloc[-21]>0 else 0
+        atr_pct = atr/price*100
+        dollars = price*float(v.tail(20).mean())
+        # Scores are heuristic 0-100 opportunity rankings, NOT probabilities.
+        def points(x, low, high, maxpoints):
+            return max(0.0,min(1.0,(x-low)/(high-low)))*maxpoints
+        # Momentum track: 30 volume, 25 momentum, 20 volatility,
+        # 15 breakout location, 10 liquidity.
+        volume_pts = points(ratio,0.8,3.0,30)
+        momentum_pts = points(ret5,-3,15,17)+points(ret20,-5,25,8)
+        volatility_pts = points(atr_pct,1,8,20)
+        dist_top = (top-price)/top*100 if top else 99
+        location_pts = points(5-abs(dist_top),0,5,15)
+        liquidity_pts = points(dollars,2_000_000,30_000_000,10)
+        momentum_score = volume_pts+momentum_pts+volatility_pts+location_pts+liquidity_pts
+        # Darvas track: 30 box tightness, 25 proximity, 20 volume,
+        # 15 reward/risk, 10 liquidity.
+        box_pts = points(18-width,0,16,30)
+        proximity_pts = points(4-abs(dist_top),0,4,25)
+        darvas_volume_pts = points(ratio,0.7,2.0,20)
+        measured_target = entry + max(0,top-bottom)
+        atr_target = entry + 2*atr
+        # Conservative scenario uses the smaller of measured-move and ATR targets.
+        scenario_target = min(measured_target,atr_target)
+        rr = (scenario_target-entry)/(entry-stop) if entry>stop else 0
+        rr_pts = points(rr,0,3,15)
+        darvas_score = box_pts+proximity_pts+darvas_volume_pts+rr_pts+liquidity_pts
+        base.update({
+            'Return_5D_Pct':round(ret5,2),'Return_20D_Pct':round(ret20,2),
+            'ATR_Pct':round(atr_pct,2),'Dollar_Volume':round(dollars,0),
+            'Momentum_Score':round(momentum_score,1),'Darvas_Score':round(darvas_score,1),
+            'Scenario_Target':round(scenario_target,3),
+            'Scenario_Upside_Pct':round((scenario_target/entry-1)*100,2),
+            'Reward_Risk_Ratio':round(rr,2),
+            'Stale_Data':(pd.Timestamp.now(tz='America/Chicago').date()-h.index[-1].date()).days>4
+        })
+        base['Score_Track'] = 'MOMENTUM' if momentum_score>=darvas_score else 'DARVAS'
+        base['Opportunity_Score'] = round(max(momentum_score,darvas_score),1)
     except Exception as exc:
         base['Data_Status'] = 'DATA_ERROR'
         base['Pass_Finviz_Filters'] = False
@@ -283,8 +330,94 @@ def pdf_report(candidates, full, stats):
     return path
 
 
+def select_v5(candidates):
+    """Predeclared 6 momentum + 4 Darvas slots; no knowledge of future returns."""
+    eligible = candidates.copy()
+    eligible = eligible.loc[
+        (~eligible.Ticker.isin(KNOWN_CORPORATE_ACTION_FLAGS)) &
+        (eligible.Data_Status=='OK') &
+        (eligible.Stale_Data==False) &
+        (~eligible.Darvas_Status.fillna('').str.contains('EXTENDED|EXCLUDE',regex=True)) &
+        (pd.to_numeric(eligible.Risk_Pct,errors='coerce').between(1,35)) &
+        (pd.to_numeric(eligible.Dollar_Volume,errors='coerce')>=3_000_000)
+    ].copy()
+    eligible['Selection_Track']=''
+    # Use independent ranked pools; no sector caps because sector metadata is unavailable.
+    momentum = eligible.sort_values(['Momentum_Score','Ticker'],ascending=[False,True]).head(6).copy()
+    momentum['Selection_Track']='MOMENTUM'
+    remaining = eligible.loc[~eligible.Ticker.isin(momentum.Ticker)]
+    darvas = remaining.sort_values(['Darvas_Score','Ticker'],ascending=[False,True]).head(4).copy()
+    darvas['Selection_Track']='DARVAS'
+    top = pd.concat([momentum,darvas],ignore_index=True)
+    # Within each track preserve descending track-specific score; output track order.
+    top['Selection_Score']=top.apply(lambda r: r.Momentum_Score if r.Selection_Track=='MOMENTUM' else r.Darvas_Score,axis=1)
+    top=top.sort_values(['Selection_Score','Ticker'],ascending=[False,True]).reset_index(drop=True)
+    top.insert(0,'Rank',range(1,len(top)+1))
+    return top,eligible
+
+
+def v5_pdf(top,eligible,stats):
+    path=OUT/f'darvas_v5_top10_{DATE}.pdf'
+    doc=SimpleDocTemplate(str(path),pagesize=landscape(letter),leftMargin=30,rightMargin=30,topMargin=30,bottomMargin=30)
+    styles=getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='V5Small',parent=styles['Normal'],fontSize=8,leading=11))
+    styles.add(ParagraphStyle(name='V5Head',parent=styles['V5Small'],textColor=colors.white,fontSize=8))
+    story=[Paragraph(f'Darvas Version 5 | Top 10 | {DATE}',styles['Title']),Spacer(1,10)]
+    notes=[
+        f"Universe {stats['universe']} | Full histories {stats['ok']} ({stats['coverage']:.1%}) | Scanner candidates {stats['candidates']} | V5 eligible {len(eligible)}",
+        '6 momentum slots + 4 Darvas slots; scores are heuristic rankings, NOT probabilities or projected returns.',
+        'Data: Yahoo Finance daily auto-adjusted OHLCV. Current-day bars can be incomplete if run before market close.',
+        'All entries are WATCHLIST ONLY. No independent live news, merger, catalyst, or corporate-action clearance.',
+        'Targets are technical scenarios (minimum of 20-day box measured move and 2 ATR); not expected 1-5 day returns.',
+        'Price stop distance does not bound actual losses; gap/slippage risk remains. Confirm prices and news before trading.'
+    ]
+    for note in notes:story.extend([Paragraph(escape(note),styles['V5Small']),Spacer(1,5)])
+    story.append(Spacer(1,10))
+    cols=['Rank','Ticker','Selection_Track','Price','Selection_Score','Volume_Ratio','Return_5D_Pct','ATR_Pct','Risk_Pct','Scenario_Upside_Pct','Darvas_Status']
+    widths=[31,45,76,54,62,55,59,49,48,71,165]
+    rows=[[Paragraph(escape(x.replace('_',' ')),styles['V5Head']) for x in cols]]
+    for _,r in top.iterrows():
+        rows.append([Paragraph(escape(str(r.get(x,''))),styles['V5Small']) for x in cols])
+    if len(rows)>1:
+        t=Table(rows,colWidths=widths,repeatRows=1)
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#203451')),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.whitesmoke]),('GRID',(0,0),(-1,-1),.25,colors.lightgrey),('VALIGN',(0,0),(-1,-1),'TOP')]))
+        story.append(t)
+    else:story.append(Paragraph('No eligible candidates. Check data quality and exclusions.',styles['Normal']))
+    story.append(PageBreak())
+    story.append(Paragraph('Top 3 | Mechanical Trade-Planning Reference',styles['Heading1']))
+    for _,r in top.head(3).iterrows():
+        story.append(Spacer(1,8))
+        story.append(Paragraph(f"#{int(r.Rank)} {escape(str(r.Ticker))} | {escape(str(r.Selection_Track))} | Score {r.Selection_Score:.1f}/100",styles['Heading2']))
+        lines=[f"Reference close: ${r.Price:.2f} | 20-day resistance: ${r.Box_Top:.2f} | 20-day support: ${r.Box_Bottom:.2f}",
+               f"Mechanical trigger: ${r.Entry_Trigger:.2f} | Mechanical stop: ${r.Stop_Loss:.2f} | Stop distance: {r.Risk_Pct:.2f}%",
+               f"Technical scenario target: ${r.Scenario_Target:.2f} | Scenario upside from trigger: {r.Scenario_Upside_Pct:.2f}% | Reward/risk: {r.Reward_Risk_Ratio:.2f}x",
+               f"Volume ratio: {r.Volume_Ratio:.2f}x | Last daily bar: {r.Last_Price_Date} | Status: {r.Darvas_Status}",
+               'Trigger and stop are illustrative, not orders. Verify news, intraday price, gaps, and liquidity.']
+        for line in lines:story.append(Paragraph(escape(line),styles['V5Small']))
+    story.append(Spacer(1,16))
+    story.append(Paragraph('Scoring details',styles['Heading2']))
+    story.append(Paragraph('Momentum: volume 30, returns 25, ATR volatility 20, proximity 15, liquidity 10. Darvas: box tightness 30, proximity 25, volume 20, scenario reward/risk 15, liquidity 10. Scores are not backtest-calibrated.',styles['V5Small']))
+    doc.build(story)
+    return path
+
+
+def save_watchlist(top):
+    cols=['Rank','Ticker','Selection_Track','Selection_Score','Price','Last_Price_Date','Entry_Trigger','Stop_Loss','Scenario_Target','Scenario_Upside_Pct','Risk_Pct','Volume_Ratio','Return_5D_Pct','Return_20D_Pct','ATR_Pct','Darvas_Status','Corporate_Action_Check']
+    top[cols].to_csv(OUT/f'v5_top10_{DATE}.csv',index=False)
+    top.head(3)[cols].to_csv(OUT/f'v5_top3_{DATE}.csv',index=False)
+    # Local snapshot; GitHub Actions does not persist this file between fresh runs.
+    history_path=OUT/'v5_selection_history.csv'
+    snapshot=top[cols].copy()
+    snapshot.insert(0,'Scan_Date',DATE)
+    if history_path.exists():
+        old=pd.read_csv(history_path,dtype={'Ticker':str,'Scan_Date':str})
+        old=old.loc[old.Scan_Date!=DATE]
+        snapshot=pd.concat([old,snapshot],ignore_index=True)
+    snapshot.to_csv(history_path,index=False)
+
+
 def main():
-    print(f'Darvas v3 starting: {DATE}',flush=True)
+    print(f'Darvas v5 starting: {DATE}',flush=True)
     universe = get_universe()
     records = universe.to_dict('records')
     results = []
@@ -331,6 +464,12 @@ def main():
              'candidates':len(candidates),'flagged':flagged}
     (OUT/f'run_summary_{DATE}.json').write_text(json.dumps(stats,indent=2))
     print('SUMMARY:',json.dumps(stats),flush=True)
+    top,eligible=select_v5(candidates)
+    save_watchlist(top)
+    eligible.to_csv(OUT/f'v5_eligible_{DATE}.csv',index=False)
+    v5=v5_pdf(top,eligible,stats)
+    print('VERSION 5 TOP 10:',top[['Ticker','Selection_Track','Selection_Score']].to_string(index=False),flush=True)
+    print('V5 PDF CREATED:',v5,flush=True)
     # Always create an explicitly qualified report; never disguise missing coverage.
     pdf = pdf_report(candidates,full,stats)
     print('PDF CREATED:',pdf,flush=True)
